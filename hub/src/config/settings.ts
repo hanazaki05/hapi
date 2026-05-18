@@ -20,6 +20,13 @@ export interface Settings {
     listenPort?: number
     publicUrl?: string
     corsOrigins?: string[]
+    // Machine wake hooks: on-demand runner activation
+    machineWakeHooks?: Record<string, {
+        enabled: boolean
+        command: string
+        timeoutMs?: number
+        expectedMachineId?: string
+    }>
     // Legacy field names (for migration, read-only)
     webappHost?: string
     webappPort?: number

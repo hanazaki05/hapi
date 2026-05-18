@@ -14,6 +14,7 @@ import type { RpcRegistry } from '../socket/rpcRegistry'
 import type { SSEManager } from '../sse/sseManager'
 import { EventPublisher, type SyncEventListener } from './eventPublisher'
 import { MachineCache, type Machine } from './machineCache'
+import { MachineWakeManager, type MachineWakeHook } from './machineWakeManager'
 import { MessageService } from './messageService'
 import {
     RpcGateway,
@@ -58,13 +59,15 @@ export class SyncEngine {
     private readonly machineCache: MachineCache
     private readonly messageService: MessageService
     private readonly rpcGateway: RpcGateway
+    private readonly machineWakeManager: MachineWakeManager
     private inactivityTimer: NodeJS.Timeout | null = null
 
     constructor(
         private readonly store: Store,
         io: Server,
         rpcRegistry: RpcRegistry,
-        sseManager: SSEManager
+        sseManager: SSEManager,
+        machineWakeHooks: Map<string, MachineWakeHook> = new Map()
     ) {
         this.eventPublisher = new EventPublisher(sseManager, (event) => this.resolveNamespace(event))
         this.sessionCache = new SessionCache(store, this.eventPublisher)
@@ -76,6 +79,7 @@ export class SyncEngine {
             (sessionId, updatedAt) => this.recordSessionActivity(sessionId, updatedAt)
         )
         this.rpcGateway = new RpcGateway(io, rpcRegistry)
+        this.machineWakeManager = new MachineWakeManager(machineWakeHooks, this.machineCache)
         this.reloadAll()
         this.inactivityTimer = setInterval(() => this.expireInactive(), 5_000)
     }
@@ -422,6 +426,15 @@ export class SyncEngine {
         effort?: string,
         permissionMode?: PermissionMode
     ): Promise<{ type: 'success'; sessionId: string } | { type: 'error'; message: string }> {
+        // Check if machine is online; if not, attempt wake hook
+        const machine = this.machineCache.getMachine(machineId)
+        if (!machine?.active) {
+            const wakeResult = await this.machineWakeManager.wakeMachine(machineId)
+            if (wakeResult.type === 'timeout' || wakeResult.type === 'command-failed') {
+                return { type: 'error', message: wakeResult.message }
+            }
+        }
+
         return await this.rpcGateway.spawnSession(
             machineId,
             directory,

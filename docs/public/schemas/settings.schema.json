@@ -72,6 +72,35 @@
     "runnerAutoStartWhenRunningHappy": {
       "type": "boolean",
       "description": "Auto-start runner when running hapi command."
+    },
+    "machineWakeHooks": {
+      "type": "object",
+      "description": "Per-machine wake hook configuration for on-demand runner activation. ENV: HAPI_MACHINE_WAKE_HOOKS (JSON string)",
+      "patternProperties": {
+        "^.+$": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable wake hook for this machine"
+            },
+            "command": {
+              "type": "string",
+              "description": "Shell command to wake the machine (e.g., SSH script)"
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "default": 90000,
+              "description": "Total timeout in milliseconds for wake command + polling"
+            },
+            "expectedMachineId": {
+              "type": "string",
+              "description": "Optional host identifier to verify the correct machine woke"
+            }
+          },
+          "required": ["enabled", "command"]
+        }
+      }
     }
   },
   "additionalProperties": false

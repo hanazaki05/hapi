@@ -28,7 +28,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { getOrCreateCliApiToken } from './config/cliApiToken'
 import { getSettingsFile } from './config/settings'
-import { loadServerSettings, type ServerSettings, type ServerSettingsResult } from './config/serverSettings'
+import { loadServerSettings, type MachineWakeHook, type ServerSettings, type ServerSettingsResult } from './config/serverSettings'
 
 export type ConfigSource = 'env' | 'file' | 'default'
 
@@ -41,6 +41,7 @@ export interface ConfigSources {
     listenPort: ConfigSource
     publicUrl: ConfigSource
     corsOrigins: ConfigSource
+    machineWakeHooks: ConfigSource
     cliApiToken: 'env' | 'file' | 'generated'
 }
 
@@ -90,6 +91,9 @@ class Configuration {
     /** Allowed CORS origins for Mini App + Socket.IO (comma-separated env override) */
     public readonly corsOrigins: string[]
 
+    /** Machine wake hooks for on-demand runner activation */
+    public readonly machineWakeHooks: Map<string, MachineWakeHook>
+
     /** Sources of each configuration value */
     public readonly sources: ConfigSources
 
@@ -114,6 +118,7 @@ class Configuration {
         this.listenPort = serverSettings.listenPort
         this.publicUrl = serverSettings.publicUrl
         this.corsOrigins = serverSettings.corsOrigins
+        this.machineWakeHooks = serverSettings.machineWakeHooks
 
         // CLI API token - will be set by _setCliApiToken() before create() returns
         this.cliApiToken = ''

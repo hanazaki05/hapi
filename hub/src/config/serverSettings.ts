@@ -10,6 +10,13 @@
 
 import { getSettingsFile, readSettings, writeSettings } from './settings'
 
+export interface MachineWakeHook {
+    enabled: boolean
+    command: string
+    timeoutMs: number
+    expectedMachineId?: string
+}
+
 export interface ServerSettings {
     telegramBotToken: string | null
     telegramNotification: boolean
@@ -19,6 +26,7 @@ export interface ServerSettings {
     listenPort: number
     publicUrl: string
     corsOrigins: string[]
+    machineWakeHooks: Map<string, MachineWakeHook>
 }
 
 export interface ServerSettingsResult {
@@ -32,6 +40,7 @@ export interface ServerSettingsResult {
         listenPort: 'env' | 'file' | 'default'
         publicUrl: 'env' | 'file' | 'default'
         corsOrigins: 'env' | 'file' | 'default'
+        machineWakeHooks: 'env' | 'file' | 'default'
     }
     savedToFile: boolean
 }
@@ -97,6 +106,7 @@ export async function loadServerSettings(dataDir: string): Promise<ServerSetting
         listenPort: 'default',
         publicUrl: 'default',
         corsOrigins: 'default',
+        machineWakeHooks: 'default',
     }
     // telegramBotToken: env > file > null
     let telegramBotToken: string | null = null
@@ -237,6 +247,50 @@ export async function loadServerSettings(dataDir: string): Promise<ServerSetting
         corsOrigins = deriveCorsOrigins(publicUrl)
     }
 
+    // machineWakeHooks: env > file > empty map
+    let machineWakeHooks = new Map<string, MachineWakeHook>()
+    if (process.env.HAPI_MACHINE_WAKE_HOOKS) {
+        try {
+            const parsed = JSON.parse(process.env.HAPI_MACHINE_WAKE_HOOKS)
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                for (const [machineId, rawHook] of Object.entries(parsed)) {
+                    const hook = rawHook as Record<string, unknown>
+                    if (typeof hook.enabled === 'boolean' && typeof hook.command === 'string') {
+                        machineWakeHooks.set(machineId, {
+                            enabled: hook.enabled,
+                            command: hook.command,
+                            timeoutMs: typeof hook.timeoutMs === 'number' ? hook.timeoutMs : 90_000,
+                            expectedMachineId: typeof hook.expectedMachineId === 'string' ? hook.expectedMachineId : undefined
+                        })
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`[WARN] Failed to parse HAPI_MACHINE_WAKE_HOOKS: ${error}`)
+        }
+        sources.machineWakeHooks = 'env'
+        if (settings.machineWakeHooks === undefined) {
+            settings.machineWakeHooks = Object.fromEntries(machineWakeHooks)
+            needsSave = true
+        }
+    } else if (settings.machineWakeHooks !== undefined) {
+        const raw = settings.machineWakeHooks
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+            for (const [machineId, hook] of Object.entries(raw)) {
+                if (hook && typeof hook === 'object' && typeof (hook as Record<string, unknown>).enabled === 'boolean' && typeof (hook as Record<string, unknown>).command === 'string') {
+                    const h = hook as Record<string, unknown>
+                    machineWakeHooks.set(machineId, {
+                        enabled: h.enabled as boolean,
+                        command: h.command as string,
+                        timeoutMs: typeof h.timeoutMs === 'number' ? h.timeoutMs : 90_000,
+                        expectedMachineId: typeof h.expectedMachineId === 'string' ? h.expectedMachineId : undefined
+                    })
+                }
+            }
+        }
+        sources.machineWakeHooks = 'file'
+    }
+
     // Save settings if any new values were added
     if (needsSave) {
         await writeSettings(settingsFile, settings)
@@ -252,6 +306,7 @@ export async function loadServerSettings(dataDir: string): Promise<ServerSetting
             listenPort,
             publicUrl,
             corsOrigins,
+            machineWakeHooks,
         },
         sources,
         savedToFile: needsSave,

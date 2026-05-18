@@ -35,8 +35,8 @@ export async function startRunner(options: { workspaceRoots?: string[] } = {}): 
   //
   // In case the setup malfunctions - our signal handlers will not properly
   // shut down. We will force exit the process with code 1.
-  let requestShutdown: (source: 'hapi-app' | 'hapi-cli' | 'os-signal' | 'exception', errorMessage?: string) => void;
-  let resolvesWhenShutdownRequested = new Promise<({ source: 'hapi-app' | 'hapi-cli' | 'os-signal' | 'exception', errorMessage?: string })>((resolve) => {
+  let requestShutdown: (source: 'hapi-app' | 'hapi-cli' | 'os-signal' | 'exception' | 'idle-timeout', errorMessage?: string) => void;
+  let resolvesWhenShutdownRequested = new Promise<({ source: 'hapi-app' | 'hapi-cli' | 'os-signal' | 'exception' | 'idle-timeout', errorMessage?: string })>((resolve) => {
     requestShutdown = (source, errorMessage) => {
       logger.debug(`[RUNNER RUN] Requesting shutdown (source: ${source}, errorMessage: ${errorMessage})`);
 
@@ -140,6 +140,37 @@ export async function startRunner(options: { workspaceRoots?: string[] } = {}): 
       Number.isFinite(envWebhookTimeout) && envWebhookTimeout > 0
         ? envWebhookTimeout
         : 15_000;
+
+    // Idle timeout: auto-stop runner when no runner-spawned sessions remain
+    const idleTimeoutMs = Number(process.env.HAPI_RUNNER_IDLE_TIMEOUT_MS) || 0;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const stopIdleTimer = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+
+    const startIdleTimer = () => {
+      stopIdleTimer();
+      if (idleTimeoutMs <= 0) return;
+      logger.debug(`[RUNNER RUN] Starting idle timer (${idleTimeoutMs}ms)`);
+      idleTimer = setTimeout(() => {
+        logger.debug('[RUNNER RUN] Idle timeout reached, stopping runner');
+        requestShutdown('idle-timeout');
+      }, idleTimeoutMs);
+    };
+
+    const checkAndStartIdleTimer = () => {
+      const hasRunnerSessions = Array.from(pidToTrackedSession.values())
+        .some(s => s.startedBy === 'runner');
+      if (!hasRunnerSessions) {
+        startIdleTimer();
+      } else {
+        stopIdleTimer();
+      }
+    };
 
     // Session spawning awaiter system
     const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
@@ -484,6 +515,11 @@ export async function startRunner(options: { workspaceRoots?: string[] } = {}): 
 
         pidToTrackedSession.set(pid, trackedSession);
 
+        // When a runner-spawned session starts, cancel idle timer
+        if (trackedSession.startedBy === 'runner') {
+          stopIdleTimer();
+        }
+
         happyProcess.on('exit', (code, signal) => {
           observedExitCode = typeof code === 'number' ? code : null;
           observedExitSignal = signal ?? null;
@@ -526,6 +562,7 @@ export async function startRunner(options: { workspaceRoots?: string[] } = {}): 
             // from this orphaned PID cannot be silently promoted into a
             // ghost session by onHappySessionWebhook().
             pidToTrackedSession.delete(pid);
+            checkAndStartIdleTimer();
 
             // Terminate the entire process tree (wrapper + agent
             // grandchildren).  Using killProcessByChildProcess instead of
@@ -631,6 +668,7 @@ export async function startRunner(options: { workspaceRoots?: string[] } = {}): 
           }
 
           pidToTrackedSession.delete(pid);
+          checkAndStartIdleTimer();
           logger.debug(`[RUNNER RUN] Removed session ${sessionId} from tracking`);
           return true;
         }
@@ -646,6 +684,7 @@ export async function startRunner(options: { workspaceRoots?: string[] } = {}): 
       pidToTrackedSession.delete(pid);
       pidToAwaiter.delete(pid);
       pidToErrorAwaiter.delete(pid);
+      checkAndStartIdleTimer();
     };
 
     // Start control server
@@ -732,6 +771,11 @@ export async function startRunner(options: { workspaceRoots?: string[] } = {}): 
     console.log('Waiting for sessions. Press Ctrl+C to stop.');
     console.log('');
 
+    // Start idle timer if configured (no sessions at startup)
+    if (idleTimeoutMs > 0) {
+      startIdleTimer();
+    }
+
     reportSpawnOutcomeToHub = (outcome) => {
       void apiMachine.updateRunnerState((state: RunnerState | null) => {
         const baseState: RunnerState = state
@@ -788,11 +832,16 @@ export async function startRunner(options: { workspaceRoots?: string[] } = {}): 
       }
 
       // Prune stale sessions
+      let staleSessionPruned = false;
       for (const [pid, _] of pidToTrackedSession.entries()) {
         if (!isProcessAlive(pid)) {
           logger.debug(`[RUNNER RUN] Removing stale session with PID ${pid} (process no longer exists)`);
           pidToTrackedSession.delete(pid);
+          staleSessionPruned = true;
         }
+      }
+      if (staleSessionPruned) {
+        checkAndStartIdleTimer();
       }
 
       // Check if runner needs update
@@ -860,10 +909,11 @@ export async function startRunner(options: { workspaceRoots?: string[] } = {}): 
     }, heartbeatIntervalMs); // Every 60 seconds in production
 
     // Setup signal handlers
-    const cleanupAndShutdown = async (source: 'hapi-app' | 'hapi-cli' | 'os-signal' | 'exception', errorMessage?: string) => {
+    const cleanupAndShutdown = async (source: 'hapi-app' | 'hapi-cli' | 'os-signal' | 'exception' | 'idle-timeout', errorMessage?: string) => {
       logger.debug(`[RUNNER RUN] Starting proper cleanup (source: ${source}, errorMessage: ${errorMessage})...`);
 
-      // Clear health check interval
+      // Clear idle timer and health check interval
+      stopIdleTimer();
       if (restartOnStaleVersionAndHeartbeat) {
         clearInterval(restartOnStaleVersionAndHeartbeat);
         logger.debug('[RUNNER RUN] Health check interval cleared');
