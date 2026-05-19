@@ -487,22 +487,33 @@ export class SyncEngine {
             return { type: 'error', message: 'Resume session ID unavailable', code: 'resume_unavailable' }
         }
 
-        const onlineMachines = this.machineCache.getOnlineMachinesByNamespace(namespace)
-        if (onlineMachines.length === 0) {
-            return { type: 'error', message: 'No machine online', code: 'no_machine_online' }
-        }
+        let onlineMachines = this.machineCache.getOnlineMachinesByNamespace(namespace)
 
-        const targetMachine = (() => {
+        const findTargetMachine = (machines: Machine[]) => {
             if (metadata.machineId) {
-                const exact = onlineMachines.find((machine) => machine.id === metadata.machineId)
+                const exact = machines.find((machine) => machine.id === metadata.machineId)
                 if (exact) return exact
             }
             if (metadata.host) {
-                const hostMatch = onlineMachines.find((machine) => machine.metadata?.host === metadata.host)
+                const hostMatch = machines.find((machine) => machine.metadata?.host === metadata.host)
                 if (hostMatch) return hostMatch
             }
             return null
-        })()
+        }
+
+        let targetMachine = findTargetMachine(onlineMachines)
+
+        if (!targetMachine) {
+            const wakeTarget = findTargetMachine(this.machineCache.getMachinesByNamespace(namespace))
+            if (wakeTarget && !wakeTarget.active) {
+                const wakeResult = await this.machineWakeManager.wakeMachine(wakeTarget.id)
+                if (wakeResult.type === 'timeout' || wakeResult.type === 'command-failed') {
+                    return { type: 'error', message: wakeResult.message, code: 'resume_failed' }
+                }
+                onlineMachines = this.machineCache.getOnlineMachinesByNamespace(namespace)
+                targetMachine = findTargetMachine(onlineMachines)
+            }
+        }
 
         if (!targetMachine) {
             return { type: 'error', message: 'No machine online', code: 'no_machine_online' }

@@ -605,6 +605,60 @@ describe('session model', () => {
         }
     })
 
+    it('wakes an offline machine before resuming a session on it', async () => {
+        const store = new Store(':memory:')
+        const engine = new SyncEngine(
+            store,
+            {} as never,
+            new RpcRegistry(),
+            { broadcast() {} } as never
+        )
+
+        try {
+            const session = engine.getOrCreateSession(
+                'session-wake-before-resume',
+                {
+                    path: '/tmp/project',
+                    host: 'localhost',
+                    machineId: 'machine-1',
+                    flavor: 'codex',
+                    codexSessionId: 'codex-thread-1'
+                },
+                null,
+                'default',
+                'gpt-5.4'
+            )
+            engine.getOrCreateMachine(
+                'machine-1',
+                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                null,
+                'default'
+            )
+
+            let wakeMachineId: string | undefined
+            ;(engine as any).machineWakeManager.wakeMachine = async (machineId: string) => {
+                wakeMachineId = machineId
+                engine.handleMachineAlive({ machineId, time: Date.now() })
+                return { type: 'ok' }
+            }
+
+            let spawnMachineId: string | undefined
+            ;(engine as any).rpcGateway.spawnSession = async (machineId: string) => {
+                spawnMachineId = machineId
+                return { type: 'success', sessionId: session.id }
+            }
+            ;(engine as any).waitForSessionActive = async () => true
+
+            const result = await engine.resumeSession(session.id, 'default')
+
+            expect(result).toEqual({ type: 'success', sessionId: session.id })
+            expect(wakeMachineId).toBe('machine-1')
+            expect(spawnMachineId).toBe('machine-1')
+        } finally {
+            engine.stop()
+        }
+    })
+
     it('recovers claude resume session ID from stored messages when metadata is missing it', async () => {
         const store = new Store(':memory:')
         const engine = new SyncEngine(
