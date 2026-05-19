@@ -26,6 +26,31 @@ function createMachine(overrides?: Partial<Machine>): Machine {
 }
 
 describe('machines routes', () => {
+    it('wakes an offline machine', async () => {
+        const machine = createMachine({ active: false })
+        const calls: string[] = []
+        const engine = {
+            getMachine: () => machine,
+            wakeMachine: async (machineId: string) => {
+                calls.push(machineId)
+                return { type: 'ok' }
+            }
+        } as Partial<SyncEngine>
+
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => {
+            c.set('namespace', 'default')
+            await next()
+        })
+        app.route('/api', createMachinesRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/machines/machine-1/wake', { method: 'POST' })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ type: 'success' })
+        expect(calls).toEqual(['machine-1'])
+    })
+
     it('returns Codex models for an online machine', async () => {
         const machine = createMachine()
         const engine = {

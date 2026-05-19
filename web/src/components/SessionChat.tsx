@@ -79,6 +79,27 @@ function hasAbortableAgentRun(blocks: readonly ChatBlock[]): boolean {
     return false
 }
 
+function WakeIcon(props: { className?: string }) {
+    return (
+        <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={props.className}
+            aria-hidden="true"
+        >
+            <path d="M12 2v10" />
+            <path d="M18.4 6.6a9 9 0 1 1-12.8 0" />
+        </svg>
+    )
+}
+
 export function SessionChat(props: {
     api: ApiClient
     session: Session
@@ -103,6 +124,9 @@ export function SessionChat(props: {
     onRetryMessage?: (localId: string) => void
     autocompleteSuggestions?: (query: string) => Promise<Suggestion[]>
     availableSlashCommands?: readonly SlashCommand[]
+    targetMachineOffline?: boolean
+    isWakingMachine?: boolean
+    onWakeMachine?: () => void
 }) {
     const { haptic } = usePlatform()
     const { t } = useTranslation()
@@ -503,8 +527,23 @@ export function SessionChat(props: {
 
             {sessionInactive ? (
                 <div className="px-3 pt-3">
-                    <div className="mx-auto w-full max-w-content rounded-md bg-[var(--app-subtle-bg)] p-3 text-sm text-[var(--app-hint)]">
-                        Session is inactive. Sending will resume it automatically.
+                    <div className="mx-auto flex w-full max-w-content flex-col gap-2 rounded-md bg-[var(--app-subtle-bg)] p-3 text-sm text-[var(--app-hint)] sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            {props.targetMachineOffline
+                                ? t('session.inactive.machineOffline')
+                                : t('session.inactive.resumeHint')}
+                        </div>
+                        {props.targetMachineOffline && props.onWakeMachine ? (
+                            <button
+                                type="button"
+                                onClick={props.onWakeMachine}
+                                disabled={props.isWakingMachine}
+                                className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-3 text-sm font-medium text-[var(--app-fg)] transition-colors hover:bg-[var(--app-secondary-bg)] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                <WakeIcon className={props.isWakingMachine ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+                                {props.isWakingMachine ? t('session.inactive.wakingMachine') : t('session.inactive.wakeMachine')}
+                            </button>
+                        ) : null}
                     </div>
                 </div>
             ) : null}

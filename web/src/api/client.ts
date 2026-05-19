@@ -22,6 +22,7 @@ import type {
     SpawnResponse,
     UploadFileResponse,
     VisibilityPayload,
+    WakeMachineResponse,
     SessionResponse,
     SessionsResponse
 } from '@/types/api'
@@ -432,6 +433,13 @@ export class ApiClient {
 
     async getMachines(): Promise<MachinesResponse> {
         return await this.request<MachinesResponse>('/api/machines')
+    }
+
+    async wakeMachine(machineId: string): Promise<WakeMachineResponse> {
+        return await this.request<WakeMachineResponse>(
+            `/api/machines/${encodeURIComponent(machineId)}/wake`,
+            { method: 'POST' }
+        )
     }
 
     async listMachineDirectory(

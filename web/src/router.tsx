@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
     Navigate,
@@ -258,6 +258,11 @@ function SessionPage() {
         refetch: refetchSession,
     } = useSession(api, sessionId)
     const {
+        machines,
+        isLoading: machinesLoading,
+        refetch: refetchMachines,
+    } = useMachines(api, true)
+    const {
         messages,
         warning: messagesWarning,
         isLoading: messagesLoading,
@@ -358,6 +363,43 @@ function SessionPage() {
         void refetchMessages()
     }, [refetchMessages, refetchSession])
 
+    const [wakingMachineId, setWakingMachineId] = useState<string | null>(null)
+    const targetMachineId = session?.metadata?.machineId ?? null
+    const targetMachineOffline = Boolean(
+        session && !session.active && targetMachineId && !machinesLoading && !machines.some(machine => machine.id === targetMachineId)
+    )
+    const handleWakeMachine = useCallback(() => {
+        if (!api || !targetMachineId || wakingMachineId) return
+
+        setWakingMachineId(targetMachineId)
+        void (async () => {
+            try {
+                await api.wakeMachine(targetMachineId)
+                addToast({
+                    title: t('wake.success.title'),
+                    body: t('wake.success.body'),
+                    sessionId,
+                    url: ''
+                })
+                await Promise.all([
+                    refetchMachines(),
+                    refetchSession(),
+                    queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
+                ])
+            } catch (error) {
+                const message = error instanceof Error ? error.message : t('dialog.error.default')
+                addToast({
+                    title: t('wake.failed.title'),
+                    body: message,
+                    sessionId,
+                    url: ''
+                })
+            } finally {
+                setWakingMachineId(null)
+            }
+        })()
+    }, [api, targetMachineId, wakingMachineId, addToast, t, sessionId, refetchMachines, refetchSession, queryClient])
+
     if (!session) {
         return (
             <div className="flex-1 flex items-center justify-center p-4">
@@ -387,6 +429,9 @@ function SessionPage() {
             onRetryMessage={retryMessage}
             autocompleteSuggestions={getAutocompleteSuggestions}
             availableSlashCommands={slashCommands}
+            targetMachineOffline={targetMachineOffline}
+            isWakingMachine={Boolean(targetMachineId && wakingMachineId === targetMachineId)}
+            onWakeMachine={targetMachineOffline ? handleWakeMachine : undefined}
         />
     )
 }

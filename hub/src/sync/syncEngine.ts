@@ -14,7 +14,7 @@ import type { RpcRegistry } from '../socket/rpcRegistry'
 import type { SSEManager } from '../sse/sseManager'
 import { EventPublisher, type SyncEventListener } from './eventPublisher'
 import { MachineCache, type Machine } from './machineCache'
-import { MachineWakeManager, type MachineWakeHook } from './machineWakeManager'
+import { MachineWakeManager, type MachineWakeHook, type WakeResult } from './machineWakeManager'
 import { MessageService } from './messageService'
 import {
     RpcGateway,
@@ -448,6 +448,10 @@ export class SyncEngine {
             effort,
             permissionMode
         )
+    }
+
+    async wakeMachine(machineId: string): Promise<WakeResult> {
+        return await this.machineWakeManager.wakeMachine(machineId)
     }
 
     async resumeSession(sessionId: string, namespace: string, opts?: { permissionMode?: PermissionMode }): Promise<ResumeSessionResult> {

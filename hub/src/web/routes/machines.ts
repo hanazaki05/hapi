@@ -66,6 +66,38 @@ export function createMachinesRoutes(getSyncEngine: () => SyncEngine | null): Ho
         return c.json(result)
     })
 
+    app.post('/machines/:id/wake', async (c) => {
+        const engine = getSyncEngine()
+        if (!engine) {
+            return c.json({ error: 'Not connected' }, 503)
+        }
+
+        const machineId = c.req.param('id')
+        const machine = requireMachine(c, engine, machineId)
+        if (machine instanceof Response) {
+            return machine
+        }
+
+        if (machine.active) {
+            return c.json({ type: 'success' })
+        }
+
+        const result = await engine.wakeMachine(machineId)
+        if (result.type === 'ok') {
+            return c.json({ type: 'success' })
+        }
+        if (result.type === 'not-configured') {
+            return c.json({ error: 'Machine wake hook not configured', code: result.type }, 404)
+        }
+        if (result.type === 'disabled') {
+            return c.json({ error: 'Machine wake hook disabled', code: result.type }, 409)
+        }
+        if (result.type === 'timeout') {
+            return c.json({ error: result.message, code: result.type }, 504)
+        }
+        return c.json({ error: result.message, code: result.type }, 500)
+    })
+
     app.post('/machines/:id/list-directory', async (c) => {
         const engine = getSyncEngine()
         if (!engine) {
