@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { MachineCache } from './machineCache'
 import type { MachineWakeHook } from '../config/serverSettings'
@@ -15,21 +15,51 @@ export type WakeResult =
 
 const POLL_INTERVAL_MS = 2_000
 
-function runCommand(command: string, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
-    return new Promise((resolve, reject) => {
-        const child = execFile(command, [], {
-            timeout: timeoutMs,
-            maxBuffer: 1024 * 1024,
-            shell: true
-        }, (error, stdout, stderr) => {
-            if (error) {
-                reject(error)
-            } else {
-                resolve({ stdout, stderr })
-            }
-        })
-        child.on('error', reject)
+interface WakeCommandProcess {
+    exit: Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>
+    stop: () => void
+}
+
+function appendWithLimit(current: string, chunk: Buffer): string {
+    const next = current + chunk.toString()
+    return next.length > 1024 * 1024 ? next.slice(-1024 * 1024) : next
+}
+
+function startCommand(command: string, onOutput: (output: { stdout: string; stderr: string }) => void): WakeCommandProcess {
+    let stdout = ''
+    let stderr = ''
+
+    const child = spawn(command, [], {
+        shell: true,
+        stdio: ['ignore', 'pipe', 'pipe']
     })
+
+    child.stdout.on('data', (chunk: Buffer) => {
+        stdout = appendWithLimit(stdout, chunk)
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+        stderr = appendWithLimit(stderr, chunk)
+    })
+
+    const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>((resolve) => {
+        child.once('error', (error) => {
+            onOutput({ stdout, stderr })
+            resolve({ code: null, signal: null, error })
+        })
+        child.once('exit', (code, signal) => {
+            onOutput({ stdout, stderr })
+            resolve({ code, signal })
+        })
+    })
+
+    return {
+        exit,
+        stop: () => {
+            if (!child.killed && child.exitCode === null) {
+                child.kill('SIGTERM')
+            }
+        }
+    }
 }
 
 export class MachineWakeManager {
@@ -69,28 +99,49 @@ export class MachineWakeManager {
     }
 
     private async executeWake(machineId: string, hook: MachineWakeHook): Promise<WakeResult> {
-        // Run wake command
-        try {
-            const { stdout, stderr } = await runCommand(hook.command, hook.timeoutMs)
+        const logOutput = ({ stdout, stderr }: { stdout: string; stderr: string }) => {
             if (stdout) console.log(`[MachineWakeManager] wake command stdout: ${stdout.trim()}`)
             if (stderr) console.error(`[MachineWakeManager] wake command stderr: ${stderr.trim()}`)
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
-            console.error(`[MachineWakeManager] wake command failed for ${machineId}: ${message}`)
-            return { type: 'command-failed', message }
         }
 
-        // Poll for machine to come online
         const deadline = Date.now() + hook.timeoutMs
+        const command = startCommand(hook.command, logOutput)
+        let commandFinished: Awaited<WakeCommandProcess['exit']> | null = null
+
         while (Date.now() < deadline) {
             const machine = this.machineCache.getMachine(machineId)
             if (machine?.active) {
                 console.log(`[MachineWakeManager] machine ${machineId} is now online`)
                 return { type: 'ok' }
             }
-            await sleep(POLL_INTERVAL_MS)
+
+            if (!commandFinished) {
+                const pollDelayMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()))
+                const result = await Promise.race([
+                    command.exit.then(exit => ({ type: 'exit' as const, exit })),
+                    sleep(pollDelayMs).then(() => ({ type: 'poll' as const }))
+                ])
+
+                if (result.type === 'exit') {
+                    commandFinished = result.exit
+                    if (commandFinished.error) {
+                        const message = commandFinished.error.message
+                        console.error(`[MachineWakeManager] wake command failed for ${machineId}: ${message}`)
+                        return { type: 'command-failed', message }
+                    }
+
+                    if (commandFinished.code !== 0) {
+                        const message = `Wake command exited with code ${commandFinished.code ?? 'null'}${commandFinished.signal ? ` signal ${commandFinished.signal}` : ''}`
+                        console.error(`[MachineWakeManager] wake command failed for ${machineId}: ${message}`)
+                        return { type: 'command-failed', message }
+                    }
+                }
+            } else {
+                await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())))
+            }
         }
 
+        command.stop()
         return {
             type: 'timeout',
             message: `Machine ${machineId} did not come online within ${hook.timeoutMs}ms`
